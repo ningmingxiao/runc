@@ -236,7 +236,16 @@ func (c *Container) exec() error {
 	for {
 		select {
 		case result := <-blockingFifoOpenCh:
-			return handleFifoResult(result)
+			err := handleFifoResult(result)
+			if err != nil {
+				return err
+			}
+			err = c.postStart()
+			if err != nil {
+				logrus.Warnf("postStart: %v", err)
+				return c.signal(unix.SIGKILL)
+			}
+			return nil
 
 		case <-time.After(time.Millisecond * 100):
 			stat, err := system.Stat(pid)
@@ -246,10 +255,28 @@ func (c *Container) exec() error {
 				if err := handleFifoResult(fifoOpen(path, false)); err != nil {
 					return errors.New("container process is already dead")
 				}
+				err := c.postStart()
+				if err != nil {
+					logrus.Warnf("postStart: %v", err)
+					return c.signal(unix.SIGKILL)
+				}
 				return nil
 			}
 		}
 	}
+}
+
+func (c *Container) postStart() error {
+	s, err := c.currentOCIState()
+	if err != nil {
+		return err
+	}
+	if c.config.Hooks != nil {
+		if err := c.config.Hooks.Run(configs.Poststart, s); err != nil {
+			return fmt.Errorf("run postStart hook: %w", err)
+		}
+	}
+	return nil
 }
 
 func readFromExecFifo(execFifo io.Reader) error {
@@ -353,19 +380,6 @@ func (c *Container) start(process *Process) (retErr error) {
 
 	if process.Init {
 		c.fifo.Close()
-		if c.config.Hooks != nil {
-			s, err := c.currentOCIState()
-			if err != nil {
-				return err
-			}
-
-			if err := c.config.Hooks.Run(configs.Poststart, s); err != nil {
-				if err := ignoreTerminateErrors(parent.terminate()); err != nil {
-					logrus.Warn(fmt.Errorf("error running poststart hook: %w", err))
-				}
-				return err
-			}
-		}
 	}
 	return nil
 }
@@ -375,7 +389,13 @@ func (c *Container) start(process *Process) (retErr error) {
 // When s is SIGKILL and the container does not have its own PID namespace, all
 // the container's processes are killed. In this scenario, the libcontainer
 // user may be required to implement a proper child reaper.
-func (c *Container) Signal(s os.Signal) error {
+func (c *Container) Signal(s os.Signal, all bool) error {
+	c.m.Lock()
+	defer c.m.Unlock()
+	return c.signal(s)
+}
+
+func (c *Container) signal(s os.Signal) error {
 	c.m.Lock()
 	defer c.m.Unlock()
 
