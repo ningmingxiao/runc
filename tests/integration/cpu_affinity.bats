@@ -99,3 +99,21 @@ function cpus_to_mask() {
 	[[ "$output" == *"nsexec"*": affinity: $mask"* ]]
 	[[ "$output" == *"Cpus_allowed_list:	$final"* ]] # Mind the literal tab.
 }
+
+@test "runc exec [CPU affinity set from config.json]" {
+	requires systemd root
+	update_config '.process.args = [ "/bin/grep", "-F", "Cpus_allowed_list", "/proc/self/status"]'
+	cpus=$(grep -c "^processor" /proc/cpuinfo)
+	cpus_minus_one=$((cpus - 1))
+	sh -c "taskset -c 0-1 runc run ct1"
+	[ "$status" -eq 0 ]
+	last_col=$(echo "$output" | awk '{print $NF}')
+	[[ "$last_col" == *"0-$cpus_minus_one"* ]] # Mind the literal tab.
+	update_config '.process.args =  ["/bin/sleep", "100"]'
+	sh -c "taskset -c 0-1 runc run -d --console-socket "$CONSOLE_SOCKET" ct2"
+	[ "$status" -eq 0 ]
+	sh -c "taskset -c 0-1 runc exec ct2 grep -F "Cpus_allowed_list:" /proc/self/status"
+	[ "$status" -eq 0 ]
+	last_col=$(echo "$output" | awk '{print $NF}')
+	[[ "$last_col" == *"0-$cpus_minus_one"* ]] # Mind the literal tab.
+}
