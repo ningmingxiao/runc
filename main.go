@@ -217,7 +217,7 @@ func configLogrus(context *cli.Context) error {
 	}
 
 	if file := context.GlobalString("log"); file != "" {
-		f, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_SYNC, 0o644)
+		f, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_SYNC, 0o640)
 		if err != nil {
 			return err
 		}
